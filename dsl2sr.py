@@ -33,11 +33,13 @@ def repack_analog(offset, div, data: IO[bytes]) -> bytes:
 def copy_data(num_probes, num_blocks, dsl: zipfile.ZipFile, sr: zipfile.ZipFile):
     # Convert individual per-channel DSL data blocks into sigrok's combined data slices.
     try:
-        info = dsl.getinfo("L-0/0")
+        # Easiest way to check if a file exists in the archive is just except a
+        # KeyError if it's not found.
+        dsl.getinfo("L-0/0")
         print(f"Converting DSLogic data")
         for b in range(num_blocks):
-            dsl_data = [dsl.read("L-%d/%d" % (p, b)) for p in range(num_probes)]
-            with sr.open("logic-1-%d" % (b+1), "w") as data:
+            dsl_data = [dsl.read(f"L-{p}/{b}") for p in range(num_probes)]
+            with sr.open(f"logic-1-{b + 1}", "w") as data:
                 data.write(merge_bitstreams(dsl_data))
         return
     except KeyError:
@@ -45,7 +47,9 @@ def copy_data(num_probes, num_blocks, dsl: zipfile.ZipFile, sr: zipfile.ZipFile)
 
 def convert_analog(probe, offset, div, num_blocks, dsl: zipfile.ZipFile, sr: zipfile.ZipFile):
     try:
-        info = dsl.getinfo(f"O-{probe}/0")
+        # Easiest way to check if a file exists in the archive is just except a
+        # KeyError if it's not found.
+        dsl.getinfo(f"O-{probe}/0")
         print(f"Converting DSCope Oscilloscope data for probe {probe}")
         for b in range(num_blocks):
             dsl_data = dsl.read(f"O-{probe}/{b}")
@@ -56,8 +60,9 @@ def convert_analog(probe, offset, div, num_blocks, dsl: zipfile.ZipFile, sr: zip
         pass
 
     try:
-        # These files are interweaved with adjacent channels.
-        info = dsl.getinfo(f"A-{probe // 2}/0")
+        # Easiest way to check if a file exists in the archive is just except a
+        # KeyError if it's not found.
+        # Note: These files are interweaved with adjacent channels.
         print(f"Converting DSCope Data Acquisition data for probe {probe}")
         for b in range(num_blocks):
             dsl_data = dsl.read(f"A-{probe // 2}/{b}")[probe::2]
@@ -83,8 +88,7 @@ def convert(dsl: zipfile.ZipFile, sr: zipfile.ZipFile):
         config = configparser.ConfigParser()
         config.read_file(TextIOWrapper(dslm, encoding='utf-8'), "header")
         if config['version']['version'] != '3':
-            print(f"Error: unsupported DSView file version {config['version']['version']}")
-            return 0,0
+            raise ValueError(f"Error: unsupported DSView file version {config['version']['version']}")
 
         header = config['header']
         num_probes = int(header["total probes"])
@@ -114,7 +118,7 @@ def convert(dsl: zipfile.ZipFile, sr: zipfile.ZipFile):
                 probe_data = header[f"probe{p}"].split("\n")
                 probe_name = probe_data[0]
                 probe = {
-                    key: value.strip()
+                    key.strip(): value.strip()
                     for key, _, value in (kv.partition(f'{p} =') for kv in probe_data[1:])
                 }
                 if probe['enable'] == '0':
@@ -126,13 +130,12 @@ def convert(dsl: zipfile.ZipFile, sr: zipfile.ZipFile):
 
             metadata['device 1']['total analog'] = str(num_probes)
         else:
-            print(f"Warning: Unknown DSView device type '{header['driver']}'")
-            return 0, 0
+            raise ValueError(f"Warning: Unknown DSView device type '{header['driver']}'")
 
     with sr.open("metadata", "w") as srm:
         metadata.write(TextIOWrapper(srm, encoding='utf-8'))
 
-    print("Found %d probes/%d blocks of data" % (num_probes, num_blocks))
+    print(f"Found {num_probes} probes/{num_blocks} blocks of data")
     return num_probes, num_blocks
 
 
